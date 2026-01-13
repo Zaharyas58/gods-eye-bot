@@ -11,121 +11,131 @@ from datetime import datetime
 from sklearn.ensemble import GradientBoostingRegressor
 
 # =====================================================
-# 1. KİMLİK VE GLOBAL AYARLAR
+# 1. KİMLİK VE AYARLAR
 # =====================================================
 BOT_NAME = "GOD'S EYE SUPREME"
 TELEGRAM_TOKEN = "8217127445:AAFoFlUGleO85Harsujg5Y0dCWmxLMuCXWg"
 CHAT_ID = "5600079517"
 
 # =====================================================
-# 2. HATASIZ VERİ ÇEKME FONKSİYONU
+# 2. HESAPLAMA VE VERİ MOTORU (GÜÇLENDİRİLDİ)
 # =====================================================
-def get_price(ticker):
+def get_clean_data(ticker):
     try:
-        data = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=True)
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
-        # En son kapanış fiyatını (skaler değer olarak) alıyoruz
-        return float(data['Close'].iloc[-1])
+        df = yf.download(ticker, period="5y", interval="1d", progress=False, auto_adjust=True)
+        # Çoklu sütun yapısını (Multi-index) temizle
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        return df
     except:
-        return 0.0
+        return None
 
-def get_full_df(ticker):
-    df = yf.download(ticker, period="5y", interval="1d", progress=False, auto_adjust=True)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    return df
+def analyze_market():
+    ons_df = get_clean_data("GC=F")
+    usd_df = get_clean_data("USDTRY=X")
+    dxy_df = get_clean_data("DX-Y.NYB")
+    
+    if ons_df is None or usd_df is None:
+        return None
 
-# =====================================================
-# 3. SUPREME ANALİZ MOTORU (HESAPLAMA DÜZELTİLDİ)
-# =====================================================
-class SupremeMind:
-    def __init__(self):
-        self.model = GradientBoostingRegressor(n_estimators=500, learning_rate=0.1, max_depth=5, random_state=42)
-
-    def analyze(self):
-        ons_df = get_full_df("GC=F")
-        dxy_df = get_full_df("DX-Y.NYB")
-        usd_df = get_full_df("USDTRY=X")
-        
-        # Teknik Göstergeler
-        ons_df['RSI'] = ta.rsi(ons_df['Close'], length=14)
-        ons_df['ADX'] = ta.adx(ons_df['High'], ons_df['Low'], ons_df['Close']).iloc[:, 0]
-        
-        # Korelasyon Hazırlığı (Hizalama)
-        ons_df['DXY'] = dxy_df['Close']
-        ons_df['Target'] = ons_df['Close'].shift(-15)
-        
-        train = ons_df.dropna()
-        features = ['Close', 'RSI', 'ADX', 'DXY']
-        
-        self.model.fit(train[features], train['Target'])
-        
-        # Anlık Veriler (Hatalı çarpımları engellemek için float zorlaması)
-        current_ons = float(ons_df['Close'].iloc[-1])
-        current_usd = float(usd_df['Close'].iloc[-1])
-        current_adx = float(ons_df['ADX'].iloc[-1])
-        
-        # YZ Tahmini
-        last_row = ons_df[features].tail(1)
-        pred_ons = float(self.model.predict(last_row)[0])
-        
-        # GRAM HESAPLAMA: (Ons / 31.1035) * Dolar
-        gram_now = (current_ons / 31.1035) * current_usd
-        gram_target = (pred_ons / 31.1035) * current_usd
-        
-        return gram_now, gram_target, current_adx, current_ons
+    # Teknik Analiz
+    ons_df['RSI'] = ta.rsi(ons_df['Close'], length=14)
+    ons_df['ADX'] = ta.adx(ons_df['High'], ons_df['Low'], ons_df['Close']).iloc[:, 0]
+    ons_df['DXY'] = dxy_df['Close']
+    
+    # YZ Tahmini (Basitleştirilmiş ve Hızlı)
+    ons_df['Target'] = ons_df['Close'].shift(-15)
+    train = ons_df.dropna()
+    features = ['Close', 'RSI', 'ADX', 'DXY']
+    
+    model = GradientBoostingRegressor(n_estimators=100, random_state=42)
+    model.fit(train[features], train['Target'])
+    
+    # Son Değerler
+    last_row = ons_df[features].tail(1)
+    pred_ons = float(model.predict(last_row)[0])
+    
+    current_ons = float(ons_df['Close'].iloc[-1])
+    current_usd = float(usd_df['Close'].iloc[-1])
+    
+    # GRAM HESABI
+    gram_now = (current_ons / 31.1035) * current_usd
+    gram_target = (pred_ons / 31.1035) * current_usd
+    
+    return {
+        "gram_now": gram_now,
+        "gram_target": gram_target,
+        "ons": current_ons,
+        "adx": float(ons_df['ADX'].iloc[-1])
+    }
 
 # =====================================================
-# 4. TELEGRAM VE OTONOM SİSTEM
+# 3. TELEGRAM MESAJ KONTROLÜ (MESAJ YAĞMURUNU ENGELLER)
 # =====================================================
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"})
+    try:
+        requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=10)
+    except:
+        pass
 
 def telegram_listener():
-    last_id = 0
-    mind = SupremeMind()
+    # offset= -1 yaparak sadece bot açıldıktan SONRA gelen mesajları almasını sağlıyoruz
+    last_update_id = 0
+    
+    # Başlangıçta eski mesajları temizle
+    init_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-1"
+    try:
+        init_res = requests.get(init_url).json()
+        if "result" in init_res and len(init_res["result"]) > 0:
+            last_update_id = init_res["result"][-1]["update_id"]
+    except:
+        pass
+
     while True:
         try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_id + 1}&timeout=10"
-            res = requests.get(url).json()
-            if "result" in res:
-                for upd in res["result"]:
-                    last_id = upd["update_id"]
-                    if "message" in upd and "text" in upd["message"]:
-                        cmd = upd["message"]["text"]
+            # Sadece yeni mesajları getir (offset kullanarak)
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_update_id + 1}&timeout=30"
+            response = requests.get(url, timeout=35).json()
+            
+            if "result" in response:
+                for update in response["result"]:
+                    last_update_id = update["update_id"]
+                    
+                    if "message" in update and "text" in update["message"]:
+                        user_msg = update["message"]["text"]
                         
-                        if cmd == "/analiz":
-                            g_now, g_target, adx_val, o_now = mind.analyze()
-                            diff = ((g_target / g_now) - 1) * 100
+                        if user_msg == "/analiz":
+                            res = analyze_market()
+                            if res:
+                                diff = ((res['gram_target'] / res['gram_now']) - 1) * 100
+                                report = (f"👁️ **{BOT_NAME} ANALİZ**\n\n"
+                                          f"💰 Gram: {res['gram_now']:.2f} TL\n"
+                                          f"🎯 Hedef: {res['gram_target']:.2f} TL\n"
+                                          f"📈 Fark: %{diff:.2f}\n\n"
+                                          f"🔍 Ons: {res['ons']:.2f}$\n"
+                                          f"💪 Güç: {res['adx']:.1f}")
+                                send_telegram(report)
+                            else:
+                                send_telegram("❌ Veri çekilemedi, tekrar deneyin.")
+                        
+                        elif user_msg == "/haber":
+                            send_telegram("🌍 **HABER:** ABD Tarım Dışı İstihdam verisi bekleniyor, piyasa yatay.")
                             
-                            msg = (f"👁️ **GOD'S EYE ANALİZ**\n\n"
-                                   f"💰 **Gram Altın:** {g_now:.2f} TL\n"
-                                   f"🎯 **15 Günlük Hedef:** {g_target:.2f} TL\n"
-                                   f"📈 **Beklenen Değişim:** %{diff:.2f}\n\n"
-                                   f"🔍 **Ons:** {o_now:.2f}$\n"
-                                   f"💪 **Trend Gücü (ADX):** {adx_val:.1f}\n"
-                                   f"📢 **Karar:** {'ALIM UYGUN' if diff > 2 else 'İZLEMEDE KAL'}")
-                            send_telegram(msg)
-                            
-                        elif cmd == "/haber":
-                            send_telegram("🌍 **HABER HATTI:** FED faiz kararı öncesi piyasa beklemede. Dolar endeksi 103 seviyesinde direnç gösteriyor.")
-        except: pass
-        time.sleep(2)
+        except Exception as e:
+            time.sleep(5)
+        time.sleep(1)
 
-if 'supreme_v33' not in st.session_state:
+# Dinleyiciyi başlat (Tek seferlik)
+if 'bot_v34_running' not in st.session_state:
     threading.Thread(target=telegram_listener, daemon=True).start()
-    st.session_state.supreme_v33 = True
+    st.session_state.bot_v34_running = True
 
 # =====================================================
-# 5. DASHBOARD
+# 4. ARAYÜZ
 # =====================================================
-st.title(f"🛡️ {BOT_NAME} V33")
-st.write("Hesaplama motoru stabilize edildi. Telegram üzerinden test edebilirsiniz.")
-
-if st.button("SİSTEMİ TEST ET"):
-    m = SupremeMind()
-    gn, gt, ax, on = m.analyze()
-    st.metric("Gram Altın (Gerçek)", f"{gn:.2f} TL")
-    st.metric("YZ Hedef", f"{gt:.2f} TL")
+st.title(f"🛡️ {BOT_NAME} V34")
+st.success("Telegram dinleyicisi stabilize edildi. Mesaj döngüsü kırıldı.")
+if st.button("MANUEL ANALİZ"):
+    r = analyze_market()
+    st.write(r)
