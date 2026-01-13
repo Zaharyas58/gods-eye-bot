@@ -8,122 +8,102 @@ import threading
 import time
 import os
 from sklearn.ensemble import RandomForestClassifier
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # =====================================================
-# 1. KONFİGÜRASYON VE DATABASE (CSV)
+# 1. KONFİGÜRASYON VE ZOMBİ KONTROLÜ
 # =====================================================
-BOT_NAME = "GOD'S EYE PROPHET"
+BOT_NAME = "GOD'S EYE PROPHET V40"
 TELEGRAM_TOKEN = "8217127445:AAFoFlUGleO85Harsujg5Y0dCWmxLMuCXWg"
 CHAT_ID = "5600079517"
-LOG_FILE = "tahmin_kayitlari.csv"
+
+# Zombi Thread Engelleyici: Python'un çalışma alanında bu thread varsa bir daha açma
+def start_bot_once():
+    # Streamlit'in kendi içindeki thread yönetimini değil, Python'un aktif threadlerini sayıyoruz
+    for t in threading.enumerate():
+        if t.name == "GodsEyeWorker":
+            return # Zaten çalışıyor, ikinciyi açma!
+
+    worker = threading.Thread(target=telegram_worker, name="GodsEyeWorker", daemon=True)
+    worker.start()
 
 # =====================================================
-# 2. PROPHET VERİ MOTORU (DİNAMİK HEDEF)
+# 2. VERİ VE ML MOTORU (CACHE'LENMİŞ)
 # =====================================================
-def get_prophet_data():
+@st.cache_data(ttl=3600) # Veriyi 1 saatte bir tazeler, CPU'yu korur
+def get_optimized_data():
     assets = {"ONS": "GC=F", "DXY": "DX-Y.NYB", "SPY": "SPY", "VIX": "^VIX", "USD": "USDTRY=X"}
-    dfs = {k: yf.download(v, period="5y", interval="1d", progress=False, auto_adjust=True)['Close'] for k, v in assets.items()}
+    dfs = {k: yf.download(v, period="2y", interval="1d", progress=False, auto_adjust=True)['Close'] for k, v in assets.items()}
     
-    # Çoklu sütun temizliği
-    for k in dfs:
-        if isinstance(dfs[k], pd.DataFrame): dfs[k] = dfs[k].iloc[:, 0]
-            
     df = pd.concat(dfs.values(), axis=1, keys=dfs.keys()).dropna()
     
-    # ChatGPT Direktifi: Değişim oranları ve Trendler
+    # Değişim Oranları (Returns)
     df['ons_ret'] = df['ONS'].pct_change()
     df['dxy_ret'] = df['DXY'].pct_change()
     df['vix_spike'] = (df['VIX'].pct_change() > 0.15).astype(int)
-    df['spy_trend'] = df['SPY'].pct_change(5)
-    df['ma50_dist'] = (df['ONS'] - ta.sma(df['ONS'], length=50)) / ta.sma(df['ONS'], length=50)
     
-    # ChatGPT Direktifi: Volatility-Adjusted Breakout Target
-    # 10 gün sonraki fiyat, mevcut 10 günlük volatiliteden 1.5 kat fazla artmış mı?
+    # Volatilite Bazlı Hedef (Prophet Modu)
     vol = df['ons_ret'].rolling(10).std()
-    future_ret = (df['ONS'].shift(-10) - df['ONS']) / df['ONS']
-    df['target'] = (future_ret > (1.5 * vol)).astype(int)
+    df['target'] = ((df['ONS'].shift(-10) - df['ONS']) / df['ONS'] > (1.5 * vol)).astype(int)
     
     return df.dropna()
 
-# =====================================================
-# 3. KAHİN EĞİTİMİ VE GERÇEK BAŞARI ÖLÇÜMÜ
-# =====================================================
-def train_prophet():
-    df = get_prophet_data()
-    features = ['ons_ret', 'dxy_ret', 'vix_spike', 'spy_trend', 'ma50_dist', 'DXY', 'VIX']
+def train_and_predict():
+    df = get_optimized_data()
+    features = ['ONS', 'DXY', 'VIX', 'ons_ret', 'dxy_ret', 'vix_spike']
     
     X = df[features]
     y = df['target']
     
-    model = RandomForestClassifier(n_estimators=500, max_depth=10, random_state=42)
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X, y)
     
-    return model, df, features
-
-def get_real_success_rate():
-    """CSV dosyasından gerçek başarı oranını hesaplar"""
-    if not os.path.exists(LOG_FILE): return "Veri Yok"
-    log = pd.read_csv(LOG_FILE)
-    # 10 gün öncesinin tahminlerini gerçek fiyatla kıyaslayan bir mantık kurulur
-    return f"%{log['isabet'].mean()*100:.1f}" if 'isabet' in log else "%71.4"
-
-# =====================================================
-# 4. STRATEJİK ANALİZ (BREAKOUT FOCUS)
-# =====================================================
-def get_prophet_signal():
-    model, df, features = train_prophet()
     last_row = df[features].tail(1)
-    
-    # Patlama Olasılığı
     prob = model.predict_proba(last_row)[0][1] * 100
     
     ons_now = float(df['ONS'].iloc[-1])
     usd_now = float(df['USD'].iloc[-1])
     gram_now = (ons_now / 31.1035) * usd_now
     
-    # Kayıt Tutma (İleride doğrulamak için)
-    new_log = pd.DataFrame([[datetime.now(), ons_now, prob]], columns=['tarih', 'fiyat', 'olasilik'])
-    new_log.to_csv(LOG_FILE, mode='a', header=not os.path.exists(LOG_FILE), index=False)
-    
-    return {
-        "gram": gram_now,
-        "breakout_prob": prob,
-        "ons": ons_now,
-        "vix_status": "PANİK" if df['VIX'].iloc[-1] > 22 else "STABİL",
-        "trend": "BOĞA" if df['ma50_dist'].iloc[-1] > 0 else "AYI"
-    }
+    return gram_now, prob, ons_now
 
 # =====================================================
-# 5. TELEGRAM LİSTENER
+# 3. TELEGRAM LİSTENER (ZOMBİSİZ)
 # =====================================================
 def telegram_worker():
     last_id = 0
+    # Açılışta eski birikmiş mesajları bir kere temizle
+    try:
+        init = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset=-1").json()
+        if init.get("result"): last_id = init["result"][-1]["update_id"]
+    except: pass
+
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates?offset={last_id + 1}&timeout=30"
-            res = requests.get(url, timeout=35).json()
+            res = requests.get(url).json()
+            
             if res.get("result"):
                 for upd in res["result"]:
                     last_id = upd["update_id"]
                     if "message" in upd and "text" in upd["message"]:
                         if upd["message"]["text"] == "/analiz":
-                            sig = get_prophet_signal()
+                            g, p, o = train_and_predict()
                             msg = (f"🔮 **{BOT_NAME}**\n\n"
-                                   f"💰 **Gram:** {sig['gram']:.2f} TL\n"
-                                   f"🔥 **Patlama Olasılığı:** %{sig['breakout_prob']:.1f}\n"
-                                   f"🛡️ **VIX Durumu:** {sig['vix_status']}\n"
-                                   f"📈 **Ana Trend:** {sig['trend']}\n\n"
-                                   f"🎯 **Başarı Skoru:** {get_real_success_rate()}\n"
-                                   f"⚠️ *Analiz: Volatilite tabanlı 10 günlük kırılım.*")
+                                   f"💰 **Gram:** {g:.2f} TL\n"
+                                   f"🔥 **Patlama Olasılığı:** %{p:.1f}\n"
+                                   f"📉 **Ons Altın:** {o:.2f} $\n"
+                                   f"🛡️ *Durum: Zombi Koruma Aktif*")
                             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                                          json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+                                          json={"chat_id": CHAT_ID, "text": msg})
         except: time.sleep(10)
         time.sleep(2)
 
-if 'prophet_on' not in st.session_state:
-    st.session_state.prophet_on = True
-    threading.Thread(target=telegram_worker, daemon=True).start()
+# =====================================================
+# 4. ÇALIŞTIRMA
+# =====================================================
+start_bot_once()
 
-st.title(f"🔮 {BOT_NAME} V39")
-st.write("Prophet Mode: Volatilite ve Patlama Odaklı Kehanet Motoru")
+st.title(f"🛡️ {BOT_NAME}")
+st.success("Thread sızıntısı ve zombi bot sorunu Singleton mimarisi ile çözüldü.")
+st.write("Telegram üzerinden `/analiz` göndererek test edin. Artık sadece 1 cevap alacaksınız.")
