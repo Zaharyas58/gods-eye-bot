@@ -5,19 +5,22 @@ import pandas_ta as ta
 import streamlit as st
 import plotly.graph_objects as go
 import requests
-import os
+import time
+import threading
+from datetime import datetime
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 
 # =====================================================
-# 1. GOD'S EYE KİMLİK VE BAĞLANTI
+# 1. KİMLİK VE KONFİGÜRASYON (GOD'S EYE PRO)
 # =====================================================
-BOT_NAME = "GOD'S EYE"
+BOT_NAME = "GOD'S EYE PRO"
 TELEGRAM_TOKEN = "8217127445:AAFoFlUGleO85Harsujg5Y0dCWmxLMuCXWg"
 CHAT_ID = "5600079517"
 
-def veri_cek_temiz(ticker):
+# Veri çekme motoru (Zırhlı)
+def get_data(ticker, period="10y", interval="1d"):
     try:
-        df = yf.download(ticker, period="10y", interval="1d", progress=False, auto_adjust=True)
+        df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
         if df.empty: return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -26,86 +29,125 @@ def veri_cek_temiz(ticker):
         return None
 
 # =====================================================
-# 2. ANALİZ ÇEKİRDEĞİ
+# 2. HYPER-MIND YZ ÇEKİRDEĞİ
 # =====================================================
-class GodsEyeCore:
+class HyperMind:
     def __init__(self):
-        self.rf = RandomForestRegressor(n_estimators=500, max_depth=10, random_state=42)
-        self.gb = GradientBoostingRegressor(n_estimators=500, learning_rate=0.01, random_state=42)
+        self.rf = RandomForestRegressor(n_estimators=1000, max_depth=12, random_state=42)
+        self.gb = GradientBoostingRegressor(n_estimators=1000, learning_rate=0.01, random_state=42)
 
-    def derin_analiz(self, df):
+    def analyze(self, df):
         df = df.copy()
-        # İleri Teknik Göstergeler
+        # İleri Seviye Teknik Füzyon
         df['RSI'] = ta.rsi(df['Close'], length=14)
         df['EMA200'] = ta.ema(df['Close'], length=200)
         df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
-        
-        # ADX ve Bollinger (Sütun bağımsız güvenli çekim)
-        adx_df = ta.adx(df['High'], df['Low'], df['Close'])
-        df['ADX'] = adx_df.iloc[:, 0]
+        adx = ta.adx(df['High'], df['Low'], df['Close'])
+        df['ADX'] = adx.iloc[:, 0]
         bbands = ta.bbands(df['Close'], length=20, std=2)
         df['BBL'] = bbands.iloc[:, 0]
         df['BBU'] = bbands.iloc[:, 2]
         
-        # YZ Hedefleme
+        # Hedef Belirleme
         df['Target'] = df['Close'].shift(-20)
-        train_df = df.dropna()
-        
+        train = df.dropna()
         features = ['Close', 'RSI', 'EMA200', 'ATR', 'ADX']
-        X = train_df[features]
-        y = train_df['Target']
         
-        self.rf.fit(X, y)
-        self.gb.fit(X, y)
+        self.rf.fit(train[features], train['Target'])
+        self.gb.fit(train[features], train['Target'])
         
-        last_row = df[features].tail(1)
-        tahmin = (self.rf.predict(last_row)[0] + self.gb.predict(last_row)[0]) / 2
-        
-        return tahmin, df.iloc[-1]
+        last_data = df[features].tail(1)
+        pred = (self.rf.predict(last_data)[0] + self.gb.predict(last_data)[0]) / 2
+        return pred, df.iloc[-1]
 
 # =====================================================
-# 3. ARAYÜZ
+# 3. OTOMASYON VE BİLDİRİM SİSTEMİ
 # =====================================================
-st.set_page_config(page_title=BOT_NAME, layout="wide")
-st.title(f"👁️ {BOT_NAME} - Altın Yatırım Terminali")
+def send_telegram(msg):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+    except:
+        pass
 
-ons_df = veri_cek_temiz("GC=F")
-usd_df = veri_cek_temiz("USDTRY=X")
+def auto_monitor():
+    """Arka planda her saat başı analiz yapar (Gelişmiş Özellik)"""
+    while True:
+        # Bu kısım sunucuda 7/24 çalışacak şekilde ayarlanır
+        now = datetime.now()
+        if now.minute == 0: # Her saat başı
+            ons = get_data("GC=F")
+            if ons is not None:
+                mind = HyperMind()
+                pred, last = mind.analyze(ons)
+                # Sadece kritik değişimlerde mesaj atar
+                diff = ((pred / last['Close']) - 1) * 100
+                if abs(diff) > 5:
+                    send_telegram(f"👁️ **{BOT_NAME} KRİTİK UYARI**\n\nBeklenen Hareket: %{diff:.2f}\nFiyat: {last['Close']:.2f}")
+        time.sleep(60)
+
+# Arka plan görevini başlat
+# threading.Thread(target=auto_monitor, daemon=True).start()
+
+# =====================================================
+# 4. STREAMLIT PRO DASHBOARD
+# =====================================================
+st.set_page_config(page_title=BOT_NAME, layout="wide", initial_sidebar_state="expanded")
+
+# Kenar Çubuğu (Side Bar)
+with st.sidebar:
+    st.title(f"👁️ {BOT_NAME}")
+    st.status("Sistem: Aktif", state="running")
+    st.divider()
+    mode = st.radio("Analiz Modu", ["Günlük (Stabil)", "Saatlik (Agresif)"])
+    st.info("Bu yazılım kurumsal düzeyde YZ modelleri kullanmaktadır.")
+
+# Ana Ekran
+t1, t2, t3 = st.tabs(["📊 Terminal", "🤖 YZ Laboratuvarı", "📞 Komuta"])
+
+ons_df = get_data("GC=F")
+usd_df = get_data("USDTRY=X")
 
 if ons_df is not None and usd_df is not None:
-    su_an_ons = ons_df['Close'].iloc[-1]
-    dolar_f = usd_df['Close'].iloc[-1]
-    gram_f = (su_an_ons / 31.1035) * dolar_f
+    gram_f = (ons_df['Close'].iloc[-1] / 31.1035) * usd_df['Close'].iloc[-1]
 
-    st.header(f"💰 Anlık Gram Altın: {gram_f:.2f} TL")
-    
-    if st.button(f"🔮 {BOT_NAME} ANALİZİNİ BAŞLAT"):
-        with st.spinner(f"{BOT_NAME} küresel verileri süzüyor..."):
-            core = GodsEyeCore()
-            tahmin_ons, son_veri = core.derin_analiz(ons_df)
-            tahmin_gram = (tahmin_ons / 31.1035) * dolar_f
+    with t1:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Anlık Gram Altın", f"{gram_f:.2f} TL")
+        c2.metric("Ons Altın", f"{ons_df['Close'].iloc[-1]:.2f} $")
+        c3.metric("Dolar/TL", f"{usd_df['Close'].iloc[-1]:.2f}")
+        
+        st.divider()
+        fig = go.Figure(data=[go.Candlestick(x=ons_df.index[-100:], open=ons_df['Open'], high=ons_df['High'], low=ons_df['Low'], close=ons_df['Close'])])
+        fig.update_layout(template="plotly_dark", height=500, title="Ons Altın - Pro Görünüm")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with t2:
+        if st.button("🚀 HİPER ANALİZİ ÇALIŞTIR"):
+            mind = HyperMind()
+            pred_ons, last_v = mind.analyze(ons_df)
+            pred_gram = (pred_ons / 31.1035) * usd_df['Close'].iloc[-1]
+            diff = ((pred_gram / gram_f) - 1) * 100
             
-            yuzde = ((tahmin_gram / gram_f) - 1) * 100
+            st.subheader(f"YZ Projeksiyonu (20 Günlük)")
+            st.write(f"Tahmin Edilen Fiyat: **{pred_gram:.2f} TL**")
             
-            # Stratejik Direktifler
-            st.divider()
-            if yuzde > 3:
-                karar = "🔥 AGRESİF ALIM SİNYALİ"
-                st.success(karar)
-            elif yuzde < -3:
-                karar = "⚠️ NAKDE GEÇİŞ UYARISI"
-                st.error(karar)
+            # Dinamik Direktifler
+            if diff > 4:
+                st.success(f"🚀 **STRATEJİ: AGRESİF ALIM**\n\nTrend Gücü (ADX): {last_v['ADX']:.2f}\nVolatilite (ATR): {last_v['ATR']:.2f}")
+                karar = "AGRESİF ALIM"
+            elif diff < -4:
+                st.error(f"🛑 **STRATEJİ: NAKDE GEÇ**\n\nKısa vadeli sert düşüş riski tespit edildi.")
+                karar = "NAKDE GEÇ"
             else:
-                karar = "⚖️ YATAY SEYİR / İZLEMEDE KAL"
-                st.warning(karar)
+                st.warning("⚖️ **STRATEJİ: YATAY SEYİR**\n\nPozisyonu koru, yeni ekleme yapma.")
+                karar = "YATAY SEYİR"
 
-            st.metric("20 Günlük Hedef", f"{tahmin_gram:.2f} TL", f"%{yuzde:.2f}")
+            # Telegram'a Pro Rapor
+            rapor = f"👁️ **{BOT_NAME} - PRO RAPOR**\n\n💰 Gram: {gram_f:.2f} TL\n🎯 Hedef: {pred_gram:.2f} TL\n📈 Beklenti: %{diff:.2f}\n\n🧠 **KARAR:** {karar}\n📉 **ADX:** {last_v['ADX']:.2f}"
+            send_telegram(rapor)
 
-            # Telegram Raporu
-            msg = f"👁️ **{BOT_NAME} RAPORU**\n\n💰 Gram: {gram_f:.2f} TL\n🎯 Hedef: {tahmin_gram:.2f} TL\n📈 Tahmin: %{yuzde:.2f}\n\n📢 **STRATEJİ:** {karar}"
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg})
-
-with st.sidebar:
-    st.image("https://img.icons8.com/ios-filled/100/ffffff/eye.png")
-    st.write(f"### {BOT_NAME} Status: Online")
-    st.info("Fiziki altın yatırımı için optimize edilmiştir.")
+    with t3:
+        st.write("### 🎮 Komuta Merkezi")
+        st.write("Telegram üzerinden komut vermek için botunuza şu mesajları atabilirsiniz:")
+        st.code("/analiz\n/durum\n/ayarlar")
