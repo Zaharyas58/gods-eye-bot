@@ -1,0 +1,67 @@
+ai:
+  depth: 8             # Dengeli derinlik (Overfitting riskini azaltır)
+  estimators: 300      # Karar ağacı sayısı (Hız ve doğruluk dengesi)
+  learning: 0.001      # Ultra-hassas öğrenme
+  evolution_rate: 0.05 # Piyasa uyum hızı
+
+favorites:
+  # --- ALTIN VE KRİTİK EMTİALAR (ÖNCELİKLİ) ---
+  - GC=F               # ONS ALTIN
+  - GAU-TRY.IS         # GRAM ALTIN (BIST)
+  - USDTRY=X           # DOLAR/TL
+  - SI=F               # GÜMÜŞ
+  - DX-Y.NYB           # DOLAR ENDEKSİ (DXY)
+  
+  # --- TECH GIANTS (NASDAQ) ---
+  - NVDA
+  - TSLA
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - META
+  - AVGO
+  - NFLX
+  - SMCI
+  - AMD
+  - INTC
+  - PYPL
+  - ADBE               # Düzeltildi
+  - QCOM
+
+  # --- BIST LOKOMOTİF ---
+  - THYAO.IS
+  - EREGL.IS
+  - SISE.IS
+  - TUPRS.IS
+  - KCHOL.IS
+  - SAHOL.IS
+  - BIMAS.IS
+  - AKBNK.IS
+  - YKBNK.IS
+  - ASELS.IS
+  - FROTO.IS
+  - SASA.IS
+  - HEKTS.IS
+  - PGSUS.IS
+  - ISCTR.IS
+  - GARAN.IS
+  - ENKAI.IS
+  - ARCLK.IS
+  - TOASO.IS
+
+  # --- KRİPTO ---
+  - BTC-USD
+  - ETH-USD
+  - SOL-USD
+
+risk:
+  initial_cash: 1000000
+  max_pos: 0.25        
+  stop: 0.045          # Altın volatilitesi için hafif esnetildi (%4.5)
+  tp: 0.15             
+  trailing_stop: true  
+
+system:
+  data_period: 10y     
+  update_interval: 300 # 5 dakikada bir (API engeline takılmamak için ideal)
